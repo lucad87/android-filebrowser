@@ -1,10 +1,13 @@
 package com.lucad.myfilebrowser;
 
 import android.annotation.SuppressLint;
+import android.app.DownloadManager;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Environment;
 import android.webkit.DownloadListener;
+import android.webkit.URLUtil;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebView;
@@ -12,16 +15,15 @@ import android.webkit.WebViewClient;
 
 import androidx.activity.OnBackPressedCallback;
 import androidx.activity.OnBackPressedDispatcher;
-import androidx.annotation.Nullable;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
-
 
 public class MainActivity extends AppCompatActivity {
 
     WebView myFileBrowser;
-
     private ValueCallback<Uri[]> filePathCallback;
-    private static final int FILECHOOSER_RESULTCODE = 1;
+    private ActivityResultLauncher<Intent> fileChooserLauncher;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -31,49 +33,50 @@ public class MainActivity extends AppCompatActivity {
 
         myFileBrowser = findViewById(R.id.myFileBrowser);
         myFileBrowser.getSettings().setJavaScriptEnabled(true);
-        myFileBrowser.getSettings().setDomStorageEnabled(true); // Enable DOM storage
-        //myFileBrowser.getSettings().setDatabaseEnabled(true); // Enable database storage
-        myFileBrowser.getSettings().setAllowFileAccess(true);
+        myFileBrowser.getSettings().setDomStorageEnabled(true);
         myFileBrowser.getSettings().setAllowFileAccess(true);
         myFileBrowser.getSettings().setAllowFileAccessFromFileURLs(true);
         myFileBrowser.getSettings().setAllowUniversalAccessFromFileURLs(true);
 
         myFileBrowser.setWebViewClient(new WebViewClient());
 
-        // Set a DownloadListener to handle file downloads
         myFileBrowser.setDownloadListener(new DownloadListener() {
             @Override
             public void onDownloadStart(String url, String userAgent, String contentDisposition, String mimeType, long contentLength) {
-                // Handle the download here
-                Intent intent = new Intent(Intent.ACTION_VIEW);
-                intent.setData(Uri.parse(url));
-                startActivity(intent);
+                DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
+                request.setMimeType(mimeType);
+                String cookies = android.webkit.CookieManager.getInstance().getCookie(url);
+                request.addRequestHeader("cookie", cookies);
+                request.addRequestHeader("User-Agent", userAgent);
+                request.setDescription("Downloading file...");
+                request.setTitle(URLUtil.guessFileName(url, contentDisposition, mimeType));
+                request.allowScanningByMediaScanner();
+                request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+                request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, URLUtil.guessFileName(url, contentDisposition, mimeType));
+                DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+                dm.enqueue(request);
             }
         });
 
-        // Set a WebChromeClient to handle file uploads
         myFileBrowser.setWebChromeClient(new WebChromeClient() {
             @Override
             public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePathCallback, FileChooserParams fileChooserParams) {
                 MainActivity.this.filePathCallback = filePathCallback;
                 Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
                 intent.addCategory(Intent.CATEGORY_OPENABLE);
-                intent.setType("*/*"); // Allow all file types
-                intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true); // Allow multiple selection
-                startActivityForResult(Intent.createChooser(intent, "Choose Files"), FILECHOOSER_RESULTCODE);
+                intent.setType("*/*");
+                intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+                fileChooserLauncher.launch(Intent.createChooser(intent, "Choose Files"));
                 return true;
             }
         });
 
-        // Load the URL
         myFileBrowser.loadUrl("https://browser.lucad.cloud/");
 
-        // Inject JavaScript to observe changes in the parent element
         myFileBrowser.setWebViewClient(new WebViewClient() {
             @Override
             public void onPageFinished(WebView view, String url) {
-                // JavaScript to observe changes in the parent element
-                String js = "var targetNode = document.body;" + // Observe the body or a specific parent element
+                String js = "var targetNode = document.body;" +
                         "var config = { childList: true, subtree: true };" +
                         "var callback = function(mutationsList, observer) {" +
                         "    for(var mutation of mutationsList) {" +
@@ -105,16 +108,12 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
         });
-    }
 
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == FILECHOOSER_RESULTCODE) {
+        fileChooserLauncher = registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
             if (filePathCallback != null) {
                 Uri[] results = null;
-                if (data != null && resultCode == RESULT_OK) {
-                    // Handle multiple file selection
+                if (result.getResultCode() == RESULT_OK && result.getData() != null) {
+                    Intent data = result.getData();
                     if (data.getClipData() != null) {
                         int count = data.getClipData().getItemCount();
                         results = new Uri[count];
@@ -122,14 +121,12 @@ public class MainActivity extends AppCompatActivity {
                             results[i] = data.getClipData().getItemAt(i).getUri();
                         }
                     } else if (data.getData() != null) {
-                        // Single file selected
                         results = new Uri[]{data.getData()};
                     }
                 }
                 filePathCallback.onReceiveValue(results);
                 filePathCallback = null;
             }
-        }
+        });
     }
-
 }
